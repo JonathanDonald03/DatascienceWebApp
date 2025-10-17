@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Neural Movie Recommender</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        header {
+            text-align: center;
+            color: white;
+            margin-bottom: 30px;
+        }
+
+        header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+
+        header p {
+            font-size: 1.1em;
+            opacity: 0.9;
+        }
+
+        .stats {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            padding: 15px;
+            border-radius: 10px;
+            color: white;
+            text-align: center;
+            margin-bottom: 20px;
+            font-size: 1.1em;
+        }
+
+        .movies-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .movie-card {
+            background: white;
+            border-radius: 15px;
+            padding: 25px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            transition: transform 0.3s ease, opacity 0.3s ease;
+        }
+
+        .movie-card:hover {
+            transform: translateY(-5px);
+        }
+
+        .movie-card.fading-out {
+            opacity: 0;
+            transform: scale(0.9);
+        }
+
+        .movie-card.fading-in {
+            animation: fadeIn 0.5s ease;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: scale(0.9);
+            }
+            to {
+                opacity: 1;
+                transform: scale(1);
+            }
+        }
+
+        .movie-title {
+            font-size: 1.3em;
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 10px;
+            min-height: 60px;
+        }
+
+        .movie-info {
+            color: #666;
+            margin-bottom: 15px;
+            font-size: 0.9em;
+        }
+
+        .genres {
+            background: #f0f0f0;
+            padding: 8px 12px;
+            border-radius: 5px;
+            font-size: 0.85em;
+            color: #555;
+            margin-bottom: 15px;
+            min-height: 40px;
+        }
+
+        .rating-section {
+            margin-top: 20px;
+        }
+
+        .rating-label {
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 10px;
+            display: block;
+        }
+
+        .stars {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+
+        .star {
+            font-size: 2em;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            color: #ddd;
+            user-select: none;
+        }
+
+        .star:hover,
+        .star.active {
+            color: #ffd700;
+            transform: scale(1.2);
+        }
+
+        .rate-button {
+            width: 100%;
+            padding: 12px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 1em;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            opacity: 0.5;
+            pointer-events: none;
+        }
+
+        .rate-button.active {
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        .rate-button.active:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .rate-button:active {
+            transform: translateY(0);
+        }
+
+        .reset-button {
+            display: block;
+            margin: 0 auto;
+            padding: 15px 40px;
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+            border: 2px solid white;
+            border-radius: 25px;
+            font-size: 1em;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .reset-button:hover {
+            background: white;
+            color: #667eea;
+            transform: scale(1.05);
+        }
+
+        .loading {
+            text-align: center;
+            color: white;
+            font-size: 1.2em;
+            padding: 20px;
+        }
+
+        @media (max-width: 768px) {
+            .movies-grid {
+                grid-template-columns: 1fr;
+            }
+
+            header h1 {
+                font-size: 1.8em;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🎬 Neural Movie Recommender</h1>
+            <p>Rate movies and watch as AI learns your preferences in real-time</p>
+        </header>
+
+        <div class="stats">
+            <span id="rated-count">Movies Rated: {{ rated_count }}</span>
+        </div>
+
+        <div class="movies-grid" id="movies-grid">
+            {% for movie in movies %}
+            <div class="movie-card" data-movie-id="{{ movie.id }}">
+                <div class="movie-title">{{ movie.title }}</div>
+                <div class="movie-info">
+                    <span>{{ movie.year }}</span>
+                </div>
+                <div class="genres">{{ movie.genres }}</div>
+                
+                <div class="rating-section">
+                    <label class="rating-label">Rate this movie:</label>
+                    <div class="stars" data-movie-id="{{ movie.id }}">
+                        <span class="star" data-rating="1">★</span>
+                        <span class="star" data-rating="2">★</span>
+                        <span class="star" data-rating="3">★</span>
+                        <span class="star" data-rating="4">★</span>
+                        <span class="star" data-rating="5">★</span>
+                    </div>
+                    <button class="rate-button" data-movie-id="{{ movie.id }}">Submit Rating</button>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+
+        <button class="reset-button" onclick="resetSession()">Reset & Start Over</button>
+    </div>
+
+    <script>
+        let selectedRatings = {};
+        let ratedCount = {{ rated_count }};
+
+        // Handle star clicks
+        document.querySelectorAll('.stars').forEach(starsContainer => {
+            const movieId = starsContainer.dataset.movieId;
+            const stars = starsContainer.querySelectorAll('.star');
+            const button = document.querySelector(`.rate-button[data-movie-id="${movieId}"]`);
+
+            stars.forEach(star => {
+                star.addEventListener('click', () => {
+                    const rating = parseInt(star.dataset.rating);
+                    selectedRatings[movieId] = rating;
+
+                    // Update star display
+                    stars.forEach((s, index) => {
+                        if (index < rating) {
+                            s.classList.add('active');
+                        } else {
+                            s.classList.remove('active');
+                        }
+                    });
+
+                    // Enable button
+                    button.classList.add('active');
+                });
+
+                star.addEventListener('mouseenter', () => {
+                    const rating = parseInt(star.dataset.rating);
+                    stars.forEach((s, index) => {
+                        if (index < rating) {
+                            s.classList.add('active');
+                        } else {
+                            s.classList.remove('active');
+                        }
+                    });
+                });
+            });
+
+            starsContainer.addEventListener('mouseleave', () => {
+                const currentRating = selectedRatings[movieId] || 0;
+                stars.forEach((s, index) => {
+                    if (index < currentRating) {
+                        s.classList.add('active');
+                    } else {
+                        s.classList.remove('active');
+                    }
+                });
+            });
+        });
+
+        // Handle rating submission
+        document.querySelectorAll('.rate-button').forEach(button => {
+            button.addEventListener('click', async () => {
+                const movieId = button.dataset.movieId;
+                const rating = selectedRatings[movieId];
+
+                if (!rating) return;
+
+                button.disabled = true;
+                button.textContent = 'Submitting...';
+
+                try {
+                    const response = await fetch('/rate', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            movie_id: parseInt(movieId),
+                            rating: rating
+                        })
+                    });
+
+                    const data = await response.json();
+
+                    if (data.success) {
+                        ratedCount++;
+                        document.getElementById('rated-count').textContent = `Movies Rated: ${ratedCount}`;
+
+                        // Fade out current card
+                        const card = document.querySelector(`.movie-card[data-movie-id="${movieId}"]`);
+                        card.classList.add('fading-out');
+
+                        // Wait for fade out, then replace with new movie
+                        setTimeout(() => {
+                            if (data.no_more_movies) {
+                                card.innerHTML = `
+                                    <div class="movie-title">🎉 All Done!</div>
+                                    <div class="movie-info">You've rated so many movies!</div>
+                                    <div class="genres">Thank you for using our recommender</div>
+                                `;
+                            } else {
+                                const movie = data.next_movie;
+                                card.dataset.movieId = movie.id;
+                                card.innerHTML = `
+                                    <div class="movie-title">${movie.title}</div>
+                                    <div class="movie-info">
+                                        <span>${movie.year}</span>
+                                    </div>
+                                    <div class="genres">${movie.genres}</div>
+                                    
+                                    <div class="rating-section">
+                                        <label class="rating-label">Rate this movie:</label>
+                                        <div class="stars" data-movie-id="${movie.id}">
+                                            <span class="star" data-rating="1">★</span>
+                                            <span class="star" data-rating="2">★</span>
+                                            <span class="star" data-rating="3">★</span>
+                                            <span class="star" data-rating="4">★</span>
+                                            <span class="star" data-rating="5">★</span>
+                                        </div>
+                                        <button class="rate-button" data-movie-id="${movie.id}">Submit Rating</button>
+                                    </div>
+                                `;
+
+                                // Re-attach event listeners for new card
+                                attachEventListeners(card);
+                            }
+
+                            card.classList.remove('fading-out');
+                            card.classList.add('fading-in');
+                            setTimeout(() => card.classList.remove('fading-in'), 500);
+                        }, 300);
+                    }
+                } catch (error) {
+                    console.error('Error:', error);
+                    button.textContent = 'Error - Try Again';
+                    button.disabled = false;
+                }
+            });
+        });
+
+        function attachEventListeners(card) {
+            const movieId = card.dataset.movieId;
+            const starsContainer = card.querySelector('.stars');
+            const stars = starsContainer.querySelectorAll('.star');
+            const button = card.querySelector('.rate-button');
+
+            stars.forEach(star => {
+                star.addEventListener('click', () => {
+                    const rating = parseInt(star.dataset.rating);
+                    selectedRatings[movieId] = rating;
+
+                    stars.forEach((s, index) => {
+                        if (index < rating) {
+                            s.classList.add('active');
+                        } else {
+                            s.classList.remove('active');
+                        }
+                    });
+
+                    button.classList.add('active');
+                });
+
+                star.addEventListener('mouseenter', () => {
+                    const rating = parseInt(star.dataset.rating);
+                    stars.forEach((s, index) => {
+                        if (index < rating) {
+                            s.classList.add('active');
+                        } else {
+                            s.classList.remove('active');
+                        }
+                    });
+                });
+            });
+
+            starsContainer.addEventListener('mouseleave', () => {
+                const currentRating = selectedRatings[movieId] || 0;
+                stars.forEach((s, index) => {
+                    if (index < currentRating) {
+                        s.classList.add('active');
+                    } else {
+                        s.classList.remove('active');
+                    }
+                });
+            });
+
+            button.addEventListener('click', async () => {
+                const rating = selectedRatings[movieId];
+                if (!rating) return;
+
+                button.disabled = true;
+                button.textContent = 'Submitting...';
+
+                try {
+                    const response = await fetch('/rate', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            movie_id: parseInt(movieId),
+                            rating: rating
+                        })
+                    });
+
+                    const data = await response.json();
+
+                    if (data.success) {
+                        ratedCount++;
+                        document.getElementById('rated-count').textContent = `Movies Rated: ${ratedCount}`;
+
+                        card.classList.add('fading-out');
+
+                        setTimeout(() => {
+                            if (data.no_more_movies) {
+                                card.innerHTML = `
+                                    <div class="movie-title">🎉 All Done!</div>
+                                    <div class="movie-info">You've rated so many movies!</div>
+                                    <div class="genres">Thank you for using our recommender</div>
+                                `;
+                            } else {
+                                const movie = data.next_movie;
+                                card.dataset.movieId = movie.id;
+                                card.innerHTML = `
+                                    <div class="movie-title">${movie.title}</div>
+                                    <div class="movie-info">
+                                        <span>${movie.year}</span>
+                                    </div>
+                                    <div class="genres">${movie.genres}</div>
+                                    
+                                    <div class="rating-section">
+                                        <label class="rating-label">Rate this movie:</label>
+                                        <div class="stars" data-movie-id="${movie.id}">
+                                            <span class="star" data-rating="1">★</span>
+                                            <span class="star" data-rating="2">★</span>
+                                            <span class="star" data-rating="3">★</span>
+                                            <span class="star" data-rating="4">★</span>
+                                            <span class="star" data-rating="5">★</span>
+                                        </div>
+                                        <button class="rate-button" data-movie-id="${movie.id}">Submit Rating</button>
+                                    </div>
+                                `;
+
+                                attachEventListeners(card);
+                            }
+
+                            card.classList.remove('fading-out');
+                            card.classList.add('fading-in');
+                            setTimeout(() => card.classList.remove('fading-in'), 500);
+                        }, 300);
+                    }
+                } catch (error) {
+                    console.error('Error:', error);
+                    button.textContent = 'Error - Try Again';
+                    button.disabled = false;
+                }
+            });
+        }
+
+        async function resetSession() {
+            if (confirm('Are you sure you want to reset and start over?')) {
+                await fetch('/reset', { method: 'POST' });
+                location.reload();
+            }
+        }
+    </script>
+</body>
+</html>
