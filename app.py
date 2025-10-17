@@ -1,4 +1,6 @@
 from flask import Flask, render_template, request, jsonify, session, redirect, url_for
+import os
+from pathlib import Path
 import torch
 import torch.nn as nn
 import numpy as np
@@ -7,7 +9,9 @@ from datetime import datetime
 import secrets
 
 app = Flask(__name__)
-app.secret_key = secrets.token_hex(16)
+# Use a stable secret key in production so sessions work across Gunicorn workers.
+# Set SECRET_KEY in your environment; falls back to a random key for local runs.
+app.secret_key = os.environ.get('SECRET_KEY', secrets.token_hex(16))
 
 # Device configuration
 device = torch.device('cuda' if torch.cuda.is_available() else
@@ -77,18 +81,19 @@ class NeuralCF(nn.Module):
 
 # Load data
 print("Loading data...")
+BASE_DIR = Path(__file__).resolve().parent
 movie_cols = ['item_id', 'title', 'release_date', 'video_release_date', 'imdb_url'] + \
              ['unknown', 'Action', 'Adventure', 'Animation', 'Children', 'Comedy', 'Crime',
               'Documentary', 'Drama', 'Fantasy', 'Film-Noir', 'Horror', 'Musical', 'Mystery',
               'Romance', 'Sci-Fi', 'Thriller', 'War', 'Western']
-movies = pd.read_csv('data/u.item', sep='|', names=movie_cols, encoding='latin-1')
+movies = pd.read_csv(BASE_DIR / 'data/u.item', sep='|', names=movie_cols, encoding='latin-1')
 
 ratings_cols = ['user_id', 'item_id', 'rating', 'timestamp']
-ratings = pd.read_csv('data/u.data', sep='\t', names=ratings_cols, encoding='latin-1')
+ratings = pd.read_csv(BASE_DIR / 'data/u.data', sep='\t', names=ratings_cols, encoding='latin-1')
 
 # Load user data for demographic recommendations
 user_cols = ['user_id', 'age', 'gender', 'occupation', 'zip_code']
-users = pd.read_csv('data/u.user', sep='|', names=user_cols, encoding='latin-1')
+users = pd.read_csv(BASE_DIR / 'data/u.user', sep='|', names=user_cols, encoding='latin-1')
 
 # Get dataset stats
 n_users = ratings['user_id'].max()
@@ -108,7 +113,7 @@ model = NeuralCF(
 
 # Load trained weights
 try:
-    model.load_state_dict(torch.load('best_model.pth', map_location=device))
+    model.load_state_dict(torch.load(BASE_DIR / 'best_model.pth', map_location=device))
     model.to(device)
     model.eval()
     print(f"✓ Model loaded successfully on {device}")
@@ -375,4 +380,7 @@ if __name__ == '__main__':
     print("\nStarting Flask server...")
     print("Open http://localhost:5000 in your browser\n")
 
-    app.run(debug=True, host='0.0.0.0', port=8080)
+    # When running directly (development), respect PORT env var if set
+    import os
+    port = int(os.environ.get('PORT', '8080'))
+    app.run(debug=True, host='0.0.0.0', port=port)
