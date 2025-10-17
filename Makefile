@@ -10,7 +10,7 @@ PORT ?= 8080
 
 .PHONY: run
 gunicorn:
-	gunicorn -c gunicorn.conf.py wsgi:app
+	gunicorn -c gunicorn.conf.py wsgi:application
 
 run:
 	python wsgi.py
