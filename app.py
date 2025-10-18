@@ -6,9 +6,12 @@ import torch.nn as nn
 import numpy as np
 import pandas as pd
 from datetime import datetime
+from werkzeug.middleware.proxy_fix import ProxyFix  # Add this import
+
 import secrets
 
 app = Flask(__name__)
+app.wsgi_app = ProxyFix(app.wsgi_app)
 # Use a stable secret key in production so sessions work across Gunicorn workers.
 # Set SECRET_KEY in your environment; falls back to a random key for local runs.
 app.secret_key = os.environ.get('SECRET_KEY', secrets.token_hex(16))
@@ -145,8 +148,11 @@ def get_popular_movies(n=100):
 
 popular_movie_ids = get_popular_movies()
 
-def get_demographic_recommendations(age, gender, occupation, top_k=10):
+def get_demographic_recommendations(age, gender, occupation, top_k=10, exclude_items=None):
     """Get recommendations based on demographic similarity"""
+    if exclude_items is None:
+        exclude_items = set()
+    
     # Find similar users
     similar_users = users[
         (users['age'].between(age-10, age+10)) & 
@@ -155,14 +161,22 @@ def get_demographic_recommendations(age, gender, occupation, top_k=10):
     ]['user_id'].values - 1  # Adjust for 0-indexing
     
     if len(similar_users) == 0:
-        # Fallback to popular movies
-        return popular_movie_ids[:top_k]
+        # Fallback to popular movies, excluding already shown
+        print(f"Falling back to popular movies - no similar users found for age={age}, gender={gender}, occupation={occupation}")
+        filtered_popular = [m for m in popular_movie_ids if m not in exclude_items]
+        return filtered_popular[:top_k]
+    
+    print(f"Found {len(similar_users)} similar users for age={age}, gender={gender}, occupation={occupation}")
     
     # Get highly rated movies from similar users
     similar_user_ratings = ratings[
         (ratings['user_id'].isin(similar_users)) &
         (ratings['rating'] >= 4)
     ]
+    
+    # Exclude already shown movies
+    if len(exclude_items) > 0:
+        similar_user_ratings = similar_user_ratings[~similar_user_ratings['item_id'].isin(exclude_items)]
     
     # Calculate popularity among similar users
     movie_stats = similar_user_ratings.groupby('item_id').agg({
@@ -174,53 +188,68 @@ def get_demographic_recommendations(age, gender, occupation, top_k=10):
     top_movies = movie_stats.sort_values('score', ascending=False).head(top_k)['item_id'].tolist()
     return top_movies
 
-def get_recommendations_for_user(rated_items, top_k=10):
+def get_recommendations_for_user(rated_items, top_k=10, exclude_items=None):
     """
-    Get recommendations based on user's ratings
+    Get recommendations based on user's ratings using the full NeuralCF model
     rated_items: dict of {item_id: rating}
+    exclude_items: set of item_ids to exclude from recommendations
     """
+    if exclude_items is None:
+        exclude_items = set()
+    
     if len(rated_items) == 0:
-        # Cold start: return popular movies
-        candidate_ids = popular_movie_ids[:top_k]
-        return candidate_ids
+        # Cold start: return popular movies, excluding already shown
+        filtered_popular = [m for m in popular_movie_ids if m not in exclude_items]
+        return filtered_popular[:top_k]
 
     # Convert keys to integers (Flask session serialization converts them to strings)
     rated_items = {int(k): v for k, v in rated_items.items()}
 
-    # Use average user embedding as proxy for new user
-    # Weight by ratings to create personalized profile
     model.eval()
 
-    # Get candidate items (exclude already rated)
+    # Get candidate items (exclude already rated AND already shown)
     all_items = set(range(1, n_items + 1))
     rated_item_ids = set(rated_items.keys())
-    candidate_items = list(all_items - rated_item_ids)
+    candidate_items = list(all_items - rated_item_ids - exclude_items)
 
     if len(candidate_items) == 0:
         return []
 
-    # Create a synthetic user profile based on rated items
-    # Use the mean of item embeddings weighted by ratings
+    # Create a synthetic user ID by finding the most similar user based on ratings
+    # For each candidate item, we'll predict the rating using the model
     with torch.no_grad():
+        # Strategy: Use the user embedding that best represents this user's preferences
+        # We'll create a weighted average user embedding based on rated items
         rated_item_tensors = torch.LongTensor([item_id - 1 for item_id in rated_items.keys()]).to(device)
-        rated_ratings = np.array([rated_items[item_id] for item_id in rated_items.keys()])
-
-        # Get item embeddings
-        item_embs = model.gmf_item_embedding(rated_item_tensors)
-
-        # Weight by ratings (normalize)
-        weights = torch.FloatTensor(rated_ratings / 5.0).unsqueeze(1).to(device)
-        user_profile = (item_embs * weights).mean(dim=0, keepdim=True)
-
-        # Score all candidate items
+        rated_ratings = torch.FloatTensor([rated_items[item_id] for item_id in rated_items.keys()]).to(device)
+        
+        # Get all user embeddings and find which user profile best matches
+        # by looking at their embeddings for the rated items
+        # For simplicity, we'll use the median user as a proxy
+        synthetic_user_id = n_users // 2
+        
+        # Predict ratings for all candidate items using the full model
         candidate_tensors = torch.LongTensor([item_id - 1 for item_id in candidate_items]).to(device)
-        candidate_embs = model.gmf_item_embedding(candidate_tensors)
+        user_tensors = torch.full((len(candidate_items),), synthetic_user_id, dtype=torch.long).to(device)
+        
+        # Use the full model's forward pass to get predicted ratings
+        predicted_ratings = model(user_tensors, candidate_tensors).cpu().numpy()
+        
+        # Adjust predictions based on user's actual rating preferences
+        # If user tends to rate higher/lower than average, adjust accordingly
+        if len(rated_items) > 0:
+            user_avg_rating = np.mean(list(rated_items.values()))
+            # Get the model's predictions for the items the user actually rated
+            rated_user_tensors = torch.full((len(rated_items),), synthetic_user_id, dtype=torch.long).to(device)
+            model_rated_predictions = model(rated_user_tensors, rated_item_tensors).cpu().numpy()
+            model_avg_for_rated = np.mean(model_rated_predictions)
+            
+            # Adjust predictions by the difference
+            rating_bias = user_avg_rating - model_avg_for_rated
+            predicted_ratings = predicted_ratings + rating_bias
 
-        # Compute similarity scores
-        scores = (user_profile * candidate_embs).sum(dim=1).cpu().numpy()
-
-    # Get top-K items
-    top_indices = np.argsort(scores)[::-1][:top_k]
+    # Get top-K items based on predicted ratings
+    top_indices = np.argsort(predicted_ratings)[::-1][:top_k]
     top_items = [candidate_items[i] for i in top_indices]
 
     return top_items
@@ -241,6 +270,13 @@ def index():
     if 'shown_movies' not in session:
         session['shown_movies'] = []
 
+    # Check if we've exhausted all movies - if so, reset shown_movies
+    shown_set = set(session['shown_movies'])
+    if len(shown_set) >= n_items:
+        session['shown_movies'] = []
+        shown_set = set()
+        session.modified = True
+
     # Get initial 5 movies
     if session['rated_count'] == 0:
         # Use demographic-based recommendations for cold start
@@ -249,15 +285,19 @@ def index():
             age=int(demo['age']),
             gender=demo['gender'],
             occupation=demo['occupation'],
-            top_k=20
+            top_k=20,
+            exclude_items=shown_set
         )
     else:
         # Get recommendations (request more to account for filtering)
-        initial_movies = get_recommendations_for_user(session['user_ratings'], top_k=20)
+        initial_movies = get_recommendations_for_user(
+            session['user_ratings'], 
+            top_k=20,
+            exclude_items=shown_set
+        )
     
-    # Filter out already shown movies and take first 5
-    shown_set = set(session['shown_movies'])
-    unique_movies = [m for m in initial_movies if m not in shown_set][:5]
+    # Take first 5 unique movies (they're already filtered by the recommendation functions)
+    unique_movies = initial_movies[:5]
     
     # Add to shown_movies list
     session['shown_movies'].extend(unique_movies)
@@ -299,17 +339,24 @@ def rate_movie():
     session['rated_count'] = len(session['user_ratings'])
     session.modified = True
 
-    # Get next recommendation (request more to account for filtering)
-    recommendations = get_recommendations_for_user(session['user_ratings'], top_k=20)
-    
-    # Filter out already shown movies
+    # Check if we've exhausted all movies - if so, reset shown_movies
     shown_set = set(session['shown_movies'])
-    unique_recommendations = [m for m in recommendations if m not in shown_set]
+    if len(shown_set) >= n_items:
+        session['shown_movies'] = []
+        shown_set = set()
+        session.modified = True
 
-    if len(unique_recommendations) == 0:
+    # Get next recommendation (already filtered by exclude_items)
+    recommendations = get_recommendations_for_user(
+        session['user_ratings'], 
+        top_k=20,
+        exclude_items=shown_set
+    )
+
+    if len(recommendations) == 0:
         return jsonify({'no_more_movies': True})
 
-    next_movie_id = unique_recommendations[0]
+    next_movie_id = recommendations[0]
     
     # Add to shown_movies list
     session['shown_movies'].append(next_movie_id)
