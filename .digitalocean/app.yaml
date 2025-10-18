@@ -1,0 +1,20 @@
+name: movie-recommender
+region: nyc
+services:
+  - name: web
+    github:
+      repo: JonathanDonald03/DatascienceWebApp
+      branch: main
+      deploy_on_push: true
+    environment_slug: python
+    run_command: gunicorn --worker-class gthread --threads 4 --workers 2 --bind 0.0.0.0:8080 app:app
+    http_port: 8080
+    instance_count: 1
+    instance_size_slug: basic-xs
+    envs:
+      - key: SECRET_KEY
+        scope: RUN_TIME
+        type: SECRET
+        value: ${APP_SECRET_KEY}
+    health_check:
+      http_path: /
