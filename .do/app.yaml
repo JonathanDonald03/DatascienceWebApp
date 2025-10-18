@@ -1,0 +1,29 @@
+name: datasciencewebapp
+services:
+- name: web
+  github:
+    repo: JonathanDonald03/DatascienceWebApp
+    branch: main
+    deploy_on_push: true
+  build_command: pip install -r requirements.txt
+  run_command: gunicorn -c gunicorn.conf.py wsgi:application
+  environment_slug: python
+  envs:
+  - key: PORT
+    value: "8080"
+  - key: SECRET_KEY
+    scope: RUN_AND_BUILD_TIME
+    type: SECRET
+  - key: WEB_CONCURRENCY
+    value: "2"
+  - key: THREADS
+    value: "2"
+  - key: GUNICORN_TIMEOUT
+    value: "120"
+  - key: LOG_LEVEL
+    value: "info"
+  http_port: 8080
+  instance_count: 1
+  instance_size_slug: basic-xxs
+  routes:
+  - path: /
