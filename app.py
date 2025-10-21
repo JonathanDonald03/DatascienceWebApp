@@ -14,7 +14,7 @@ app = Flask(__name__)
 app.wsgi_app = ProxyFix(app.wsgi_app)
 # Use a stable secret key in production so sessions work across Gunicorn workers.
 # Set SECRET_KEY in your environment; falls back to a random key for local runs.
-app.secret_key = os.environ.get('SECRET_KEY', secrets.token_hex(16))
+app.secret_key = os.environ.get('APP_SECRET_KEY', secrets.token_hex(16))
 
 # Device configuration
 device = torch.device('cuda' if torch.cuda.is_available() else
